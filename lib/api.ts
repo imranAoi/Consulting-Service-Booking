@@ -5,7 +5,7 @@ const API_URL = process.env.NEXT_PUBLIC_APP_URL;
 export async function createBooking(
   data: BookingInput
 ): Promise<CheckoutResponse> {
-  const res = await fetch(`http://localhost:5000/api/booking`, {
+  const res = await fetch(`${API_URL}/booking`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
