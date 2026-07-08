@@ -1,36 +1,96 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Consulting Service Booking
 
-## Getting Started
+A small booking app where someone fills a form, pays for a consulting session with Stripe, and then automatically gets a Google Calendar event and a confirmation email once the payment goes through.
 
-First, run the development server:
+**Live:** https://consulting-service-booking-p33iknbnq.vercel.app
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+Flow: `User → Booking Form → Payment → Confirmation Email`
+
+## What it does
+
+You open the site, enter your name, email, phone and what you want to talk about, pick a time, and hit pay. That sends you to Stripe Checkout. Once the payment is confirmed, the backend (via a Stripe webhook) creates a calendar event for the session and emails you a confirmation. The calendar invite also lands in your inbox because you're added as an attendee.
+
+Required fields on the form: **Name, Email, Phone, Meeting Agenda** (plus a preferred date/time).
+
+## Tech
+
+- **Frontend:** Next.js + TypeScript — deployed on **Vercel**
+- **Backend:** Node.js + Express (ES modules) — deployed on **Render**
+- **Payments:** Stripe Checkout + webhooks
+- **Calendar:** Google Calendar API (OAuth2)
+- **Email:** Brevo HTTP API (see note below on why not SMTP)
+
+## How it's wired
+
+```
+Frontend form
+  → POST /api/booking  →  backend creates a Stripe Checkout session
+                          (booking details stored in the session metadata)
+  → browser redirected to Stripe, user pays
+  → Stripe fires webhook: checkout.session.completed  →  POST /api/webhook
+        → create Google Calendar event (with the user as attendee)
+        → send confirmation email
+  → Stripe redirects the browser to /success
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+One thing worth knowing: the "Payment Successful" page and the calendar/email are two **separate** paths. The success page shows on Stripe's redirect. The calendar event and email happen in the webhook, on the server. So if the webhook isn't set up right, payment still succeeds but nothing else happens.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Running locally
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+**Backend**
+```bash
+cd backend
+npm install
+cp .env.example .env     # fill in the values below
+npm run dev              # runs on http://localhost:5000
+```
 
-## Learn More
+**Frontend**
+```bash
+cd frontend
+npm install
+cp .env.local.example .env.local
+npm run dev              # runs on http://localhost:3000
+```
 
-To learn more about Next.js, take a look at the following resources:
+### Backend environment variables
+```env
+PORT=5000
+CLIENT_URL=http://localhost:3000     # your frontend URL
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...      # from `stripe listen` locally, or the Dashboard in prod
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+# Google Calendar (OAuth2 — authenticate as yourself)
+GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-...
+GOOGLE_REFRESH_TOKEN=1//...
 
-## Deploy on Vercel
+# Email (Brevo)
+BREVO_API_KEY=xkeysib-...
+FROM_EMAIL=you@example.com
+FROM_NAME=Consulting
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Frontend environment variable
+```env
+NEXT_PUBLIC_API_URL=http://localhost:5000/api
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Testing the webhook locally
+Stripe needs to reach your local server, so run:
+```bash
+stripe listen --forward-to localhost:5000/api/webhook
+```
+Copy the `whsec_...` it prints into `STRIPE_WEBHOOK_SECRET`, then do a test payment.
+
+## Notes from building it
+
+- **Email uses Brevo's HTTP API, not SMTP.** Render's free tier blocks outbound SMTP ports, so Nodemailer + Gmail would just time out in production. An HTTP email API goes over HTTPS and works fine.
+- **Google Calendar uses OAuth2 with a refresh token**, not a service account. On a personal Gmail account a service account can't create Google Meet links or invite attendees cleanly, and getting one authorized turned out to be a pain. Authenticating as myself (OAuth2) means `calendarId` is just `primary` and Meet links work.
+- **The Stripe webhook route uses the raw body and is registered before `express.json()`** — otherwise the signature check fails.
+
+## Deployment
+
+- Frontend → **Vercel** (`NEXT_PUBLIC_API_URL` points at the Render backend).
+- Backend → **Render** (all the secret env vars live here). In production, the Stripe webhook endpoint is set in the Stripe Dashboard pointing at `https://<render-backend>/api/webhook`, and `CLIENT_URL` is set to the Vercel URL so the redirects and CORS line up.
